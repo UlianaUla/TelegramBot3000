@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Фолиант · Финансы</title><script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{font-family:system-ui,sans-serif;color:#183c37;background:#f2f5ef}body{max-width:900px;margin:auto;padding:22px}h1{font-family:Georgia,serif;font-size:36px;margin-bottom:6px}h2{font-size:20px}section{background:white;padding:20px;border-radius:18px;margin:16px 0;border:1px solid #dae4d8}label{display:inline-block;margin:6px 10px 8px 0}input{padding:10px;border:1px solid #a0b8a9;border-radius:8px;max-width:220px}button{background:#245b4c;color:white;border:0;border-radius:9px;padding:11px;margin:5px 5px 5px 0;cursor:pointer}button:disabled{opacity:.5}small,.muted{color:#53665d;line-height:1.6}#error{color:#9b2424;white-space:pre-wrap}#cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.number{font-size:30px;font-weight:700;margin:8px 0}.row{border-top:1px solid #dbe5db;padding:14px 0;overflow-wrap:anywhere}.badge{background:#edf2df;padding:6px 9px;border-radius:6px;font-size:12px}header{margin-bottom:24px}#status{color:#53665d}summary{cursor:pointer}p{line-height:1.5}
+</style></head><body>
+<header><span class="badge">ФОЛИАНТ · КАБИНЕТ МЕНЕДЖЕРА</span><h1>Деньги магазина</h1><p class="muted">Подтверждённые операции, себестоимость и учебные платежи</p></header>
+<p id="error" role="alert"></p><p id="status" role="status"></p>
+<section><label>С <input type="date" id="start"></label><label>По <input type="date" id="end"></label><button id="refresh">Показать период</button><p class="muted">Даты включительно, UTC. Учитывается дата подтверждения операции. Возврат за прошлый период может сделать текущий результат отрицательным.</p></section>
+<div id="cards"></div>
+<section><h2>Операционный расход</h2><p class="muted">Доставка, реклама и другие операционные затраты. Закупочную стоимость сюда повторно не вносите.</p><form id="expense"><label>Рубли <input id="amount" inputmode="decimal" required placeholder="150,00"></label><label>Описание <input id="note" required maxlength="200" placeholder="Учебная реклама"></label><button>Записать расход</button></form></section>
+<section><h2>Склад</h2><p class="muted">На складе включает резерв. Доступно = на складе − в резерве. Корзина товар не резервирует.</p><div id="inventory"></div><form id="receive"><label>Товар <select id="stock-product"></select></label><label>Пришло, шт. <input id="stock-quantity" inputmode="numeric" required></label><button>Оформить поступление</button></form></section>
+<section><h2>Резервы заказов</h2><p class="muted">Таймер — подсказка, решает серверное время. Оплата после срока запускает полный возврат без продажи.</p><div id="reservations"></div></section>
+<section><h2>Проблемные оплаты и возвраты</h2><p class="muted">Поздняя оплата временно увеличивает денежный поток, но не себестоимость. После подтверждения возврата деньги исключаются. Товар для поздней оплаты не возвращается, потому что не списывался.</p><div id="stock-problems"></div></section>
+<section><details><summary>Журнал движений склада</summary><div id="movements"></div></details></section>
+<section><h2>Платежи и полные возвраты</h2><p class="muted">Список платежей — за всё время. Запрос возврата ещё не уменьшает поступления.</p><div id="payments"></div></section>
+<section><h2>Журнал выбранного периода</h2><div id="journal"></div></section>
+<script>
+const tg=window.Telegram?.WebApp;tg?.ready();tg?.expand();
+const $=id=>document.getElementById(id), raw=tg?.initData||'';
+const today=new Date().toISOString().slice(0,10);$('end').value=today;$('start').value=today.slice(0,7)+'-01';
+const rub=n=>n===null?'Нет достоверной себестоимости':new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB'}).format(n/100);
+async function api(path,body){
+if(!raw)throw Error('Откройте кабинет кнопкой «Финансы · Mini App» в Telegram. В обычном браузере доступ к финансовым данным закрыт.');
+const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),25000);
+try{
+ let r;
+ try{r=await fetch(path,{headers:{'X-Telegram-Init-Data':raw,'Content-Type':'application/json'},method:body?'POST':'GET',body:body?JSON.stringify(body):undefined,signal:controller.signal})}
+ catch(e){throw Error('Нет связи с сервером или истекло время ожидания. Проверьте интернет и запуск бота с HTTPS-туннелем. Результат операции мог сохраниться: обновите сводку, прежде чем повторять действие.')}
+ let d;try{d=await r.json()}catch(e){throw Error('Сервер недоступен или HTTPS-туннель вернул ошибку. Проверьте запуск start-miniapp.cmd и откройте Mini App заново.')}
+ if(!r.ok)throw Error(d.error||'Ошибка сервера. Повторите обновление.');return d;
+}finally{clearTimeout(timer)}
+}
+function node(tag,text,parent){const e=document.createElement(tag);e.textContent=text;parent.append(e);return e}
+async function task(fn){$('error').textContent='';$('status').textContent='Обработка…';const buttons=[...document.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);try{await fn();$('status').textContent='Данные обновлены'}catch(e){$('error').textContent=e.message;$('status').textContent='Предыдущие данные сохранены на экране'}finally{buttons.forEach(b=>b.disabled=false)}}
+async function load(){const d=await api('/api/summary?'+new URLSearchParams({start:$('start').value,end:$('end').value}));$('cards').replaceChildren();for(const [title,val,formula] of [['Денежный поток',d.cash_flow,'Поступления − возвраты − расходы'],['Учебный результат',d.educational_result,'Поступления − возвраты − себестоимость оплаченных товаров + себестоимость полностью возвращённых товаров − расходы']]){const c=node('section','',$('cards'));node('small',d.start+' — '+d.end+' · UTC',c);node('h2',title,c);node('div',rub(val),c).className='number';node('small',formula,c)}
+node('p',`Поступления ${rub(d.receipt)} · Возвраты ${rub(d.refund)} · Расходы ${rub(d.expense)} · Себестоимость продаж ${rub(d.sold_cost)} · Возвращённая себестоимость ${rub(d.returned_cost)}`,$('cards'));
+if(d.missing_cost_operations)node('p','Для старых заказов себестоимость неизвестна. Учебный результат за этот период не вычисляется.',$('cards'));
+$('journal').replaceChildren();for(const o of d.operations){const r=node('div','',$('journal'));r.className='row';node('strong',({receipt:'Поступление',refund:'Возврат',expense:'Расход'}[o.type])+' · '+rub(o.amount),r);node('p',o.confirmed_at+' · '+(o.order_id?'Заказ №'+o.order_id:'Без заказа')+' · автор '+o.author,r);if(o.note)node('small',o.note,r)}if(!d.operations.length)node('p','Операций за период нет',$('journal'));
+$('payments').replaceChildren();for(const p of d.payments){const r=node('div','',$('payments'));r.className='row';node('strong',`Заказ №${p.order_id} · ${rub(p.amount)} · ${p.status}`,r);node('p',p.provider==='demo'?'Архивный учебный платёж · действия отключены':'ЮKassa · тестовый магазин',r);let actions=p.provider==='demo'?[]:[['check','Проверить у провайдера'],...(p.status==='succeeded'||p.status==='refund_pending'?[['refund_pending','Полный возврат ЮKassa']]:[])];for(const [action,label] of actions){const b=node('button',label,r);b.onclick=()=>task(async()=>{await api('/api/payments/'+p.id,{action});await load()})}}if(!d.payments.length)node('p','Платежей пока нет',$('payments'));await loadStock()}
+let serverOffset=0;
+async function loadStock(){
+ const d=await api('/api/stock');serverOffset=Date.parse(d.server_time)-Date.now();
+ for(const id of ['inventory','reservations','stock-problems','movements'])$(id).replaceChildren();
+ const selected=$('stock-product').value;$('stock-product').replaceChildren();
+ for(const p of d.inventory){const r=node('div',`${p.title} · на складе ${p.on_hand} / в резерве ${p.reserved} / доступно ${p.available}`,$('inventory'));r.className='row';const o=node('option',p.title,$('stock-product'));o.value=p.product_id}if(selected)$('stock-product').value=selected;
+ for(const re of d.reservations){const r=node('div',`Заказ №${re.order_id} · ${re.stock_state} · резерв ${re.state}`,$('reservations'));r.className='row';node('small',`UTC: ${re.expires_at} · ${re.release_reason||''}`,r);if(re.state==='active'){const t=node('p','',r);t.dataset.expires=re.expires_at}}
+ for(const conflict of d.conflicts)node('p',`Заказ №${conflict.id}: резерв закончился, оформляется возврат. Продажа не принята.`,$('stock-problems'));
+ for(const job of d.refund_jobs){const r=node('div',`Заказ №${job.order_id} · ${job.reason} · ${job.state} · попыток ${job.attempts}`,$('stock-problems'));r.className='row';node('p',job.last_error||'Подтверждённой ошибки нет',r);node('small','Следующая попытка UTC: '+job.next_attempt_at,r);if(job.state!=='succeeded'){const b=node('button','Повторить сверку возврата',r);b.onclick=()=>task(async()=>{await api('/api/stock/refunds/'+job.payment_id+'/retry',{});await load()})}}
+ if(!d.refund_jobs.length&&!d.conflicts.length)node('p','Проблемных операций нет',$('stock-problems'));
+ for(const m of d.movements){const r=node('div',`${m.kind} · товар ${m.product_id} · Δсклад ${m.delta_on_hand} / Δрезерв ${m.delta_reserved} · заказ ${m.order_id||'—'}`,$('movements'));r.className='row';node('small',m.created_at+' · '+m.author,r)}
+ updateTimers();
+}
+function updateTimers(){for(const e of document.querySelectorAll('[data-expires]')){const left=Math.max(0,Math.ceil((Date.parse(e.dataset.expires)-Date.now()-serverOffset)/1000));e.textContent=left?`Осталось ${left} сек.`:'Срок истёк; обновите данные сервера'}}
+setInterval(updateTimers,1000);
+let receiptKey=crypto.randomUUID();$('receive').onsubmit=e=>{e.preventDefault();task(async()=>{const q=$('stock-quantity').value.trim();if(!/^[1-9]\d{0,6}$/.test(q))throw Error('Нужно положительное целое количество');await api('/api/stock/receipts',{product_id:Number($('stock-product').value),quantity:Number(q),key:receiptKey});receiptKey=crypto.randomUUID();$('stock-quantity').value='';await load()})};
+$('refresh').onclick=()=>task(load);let expenseKey=crypto.randomUUID();$('expense').onsubmit=e=>{e.preventDefault();task(async()=>{const value=$('amount').value.trim().replace(',','.');if(!/^\d{1,7}(\.\d{1,2})?$/.test(value))throw Error('Введите сумму с точностью до копейки');const parts=value.split('.');const amount=Number(parts[0])*100+Number((parts[1]||'').padEnd(2,'0'));await api('/api/expenses',{amount,note:$('note').value,key:expenseKey});expenseKey=crypto.randomUUID();$('expense').reset();await load()})};task(load);
+</script></body></html>
